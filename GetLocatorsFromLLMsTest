@@ -1,0 +1,644 @@
+using ExpleoPlaywright.LLM.SelfHealing.Utils.LLM;
+using ExpleoPlaywright.LLM.SelfHealing.Utils.Modals;
+using FluentAssertions;
+using NSubstitute;
+using NUnit.Framework;
+using System.Text.Json;
+
+namespace ExpleoPlaywright.LLM.SelfHealing.Tests
+{
+    /// <summary>
+    /// Unit tests for GetLocatorsFromLLMs class which provides AI-powered locator healing functionality.
+    /// </summary>
+    [TestFixture]
+    [Category("Unit")]
+    [Category("LLM")]
+    public class GetLocatorsFromLLMsTest
+    {
+        private LLMClient _mockLLMClient;
+        private string _samplePageSource;
+
+        [SetUp]
+        public void Setup()
+        {
+            // Create a mock LLM client
+            _mockLLMClient = Substitute.For<LLMClient>();
+
+            // Sample HTML page source for testing
+            _samplePageSource = @"
+                <html>
+                <body>
+                    <button id='submit-btn' class='btn btn-primary' data-testid='submit-button' role='button'>Submit</button>
+                    <input type='text' name='username' placeholder='Enter username' />
+                    <a href='#' title='Home Link'>Home</a>
+                </body>
+                </html>";
+        }
+
+        #region GetHealedLocator Tests
+
+        [Test(Description = "Verify GetHealedLocator returns valid LocatorSuggestions")]
+        public async Task GetHealedLocator_ValidResponse_ShouldReturnSuggestions()
+        {
+            // Arrange
+            var jsonResponse = @"{
+                ""id"": ""submit-btn"",
+                ""name"": ""submitButton"",
+                ""xpath"": ""//button[@id='submit-btn']"",
+                ""cssSelector"": ""#submit-btn"",
+                ""className"": ""btn btn-primary"",
+                ""linkText"": ""Submit"",
+                ""role"": ""button"",
+                ""testId"": ""submit-button"",
+                ""placeholder"": """",
+                ""text"": ""Submit"",
+                ""title"": """"
+            }";
+
+            _mockLLMClient.GetCompletionAsync(Arg.Any<string>()).Returns(jsonResponse);
+
+            // Act
+            var result = await GetLocatorsFromLLMs.GetHealedLocator(
+                _mockLLMClient,
+                _samplePageSource,
+                "id",
+                "old-submit-btn");
+
+            // Assert
+            result.Should().NotBeNull();
+            result!.id.Should().Be("submit-btn");
+            result.xpath.Should().Be("//button[@id='submit-btn']");
+            result.cssSelector.Should().Be("#submit-btn");
+            result.role.Should().Be("button");
+            result.testId.Should().Be("submit-button");
+        }
+
+        [Test(Description = "Verify GetHealedLocator with semantic context includes context in prompt")]
+        public async Task GetHealedLocator_WithSemanticContext_ShouldIncludeInPrompt()
+        {
+            // Arrange
+            var semanticContext = "Submit button for login form";
+            var jsonResponse = @"{
+                ""id"": ""submit-btn"",
+                ""name"": """",
+                ""xpath"": ""//button"",
+                ""cssSelector"": "".btn"",
+                ""className"": """",
+                ""linkText"": """",
+                ""role"": ""button"",
+                ""testId"": """",
+                ""placeholder"": """",
+                ""text"": """",
+                ""title"": """"
+            }";
+
+            _mockLLMClient.GetCompletionAsync(Arg.Any<string>()).Returns(jsonResponse);
+
+            // Act
+            var result = await GetLocatorsFromLLMs.GetHealedLocator(
+                _mockLLMClient,
+                _samplePageSource,
+                "id",
+                "old-btn",
+                semanticContext);
+
+            // Assert
+            result.Should().NotBeNull();
+            await _mockLLMClient.Received(1).GetCompletionAsync(Arg.Is<string>(
+                prompt => prompt.Contains(semanticContext) && prompt.Contains("Original locator: id=old-btn")));
+        }
+
+        [Test(Description = "Verify GetHealedLocator without semantic context uses locator info")]
+        public async Task GetHealedLocator_WithoutSemanticContext_ShouldUseLocatorInfo()
+        {
+            // Arrange
+            var jsonResponse = @"{
+                ""id"": ""btn"",
+                ""name"": """",
+                ""xpath"": """",
+                ""cssSelector"": """",
+                ""className"": """",
+                ""linkText"": """",
+                ""role"": """",
+                ""testId"": """",
+                ""placeholder"": """",
+                ""text"": """",
+                ""title"": """"
+            }";
+
+            _mockLLMClient.GetCompletionAsync(Arg.Any<string>()).Returns(jsonResponse);
+
+            // Act
+            var result = await GetLocatorsFromLLMs.GetHealedLocator(
+                _mockLLMClient,
+                _samplePageSource,
+                "xpath",
+                "//button[@id='old']",
+                null);
+
+            // Assert
+            result.Should().NotBeNull();
+            await _mockLLMClient.Received(1).GetCompletionAsync(Arg.Is<string>(
+                prompt => prompt.Contains("element with locatorType: xpath and locator: //button[@id='old']")));
+        }
+
+        [Test(Description = "Verify GetHealedLocator with empty semantic context uses locator info")]
+        public async Task GetHealedLocator_EmptySemanticContext_ShouldUseLocatorInfo()
+        {
+            // Arrange
+            var jsonResponse = @"{}";
+            _mockLLMClient.GetCompletionAsync(Arg.Any<string>()).Returns(jsonResponse);
+
+            // Act
+            var result = await GetLocatorsFromLLMs.GetHealedLocator(
+                _mockLLMClient,
+                _samplePageSource,
+                "css",
+                ".button",
+                "   ");
+
+            // Assert
+            await _mockLLMClient.Received(1).GetCompletionAsync(Arg.Is<string>(
+                prompt => prompt.Contains("element with locatorType: css and locator: .button")));
+        }
+
+        [Test(Description = "Verify GetHealedLocator handles all selector types in response")]
+        public async Task GetHealedLocator_AllSelectorTypes_ShouldParse()
+        {
+            // Arrange
+            var jsonResponse = @"{
+                ""id"": ""element-id"",
+                ""name"": ""element-name"",
+                ""xpath"": ""//div[@id='test']"",
+                ""cssSelector"": ""#element-id"",
+                ""className"": ""class1 class2"",
+                ""linkText"": ""Click Here"",
+                ""role"": ""button"",
+                ""testId"": ""test-id"",
+                ""placeholder"": ""Enter text"",
+                ""text"": ""Button Text"",
+                ""title"": ""Element Title""
+            }";
+
+            _mockLLMClient.GetCompletionAsync(Arg.Any<string>()).Returns(jsonResponse);
+
+            // Act
+            var result = await GetLocatorsFromLLMs.GetHealedLocator(
+                _mockLLMClient,
+                _samplePageSource,
+                "id",
+                "old-id");
+
+            // Assert
+            result.Should().NotBeNull();
+            result!.id.Should().Be("element-id");
+            result.name.Should().Be("element-name");
+            result.xpath.Should().Be("//div[@id='test']");
+            result.cssSelector.Should().Be("#element-id");
+            result.className.Should().Be("class1 class2");
+            result.linkText.Should().Be("Click Here");
+            result.role.Should().Be("button");
+            result.testId.Should().Be("test-id");
+            result.placeholder.Should().Be("Enter text");
+            result.text.Should().Be("Button Text");
+            result.title.Should().Be("Element Title");
+        }
+
+        [Test(Description = "Verify GetHealedLocator handles partial response with some empty values")]
+        public async Task GetHealedLocator_PartialResponse_ShouldHandleEmptyValues()
+        {
+            // Arrange
+            var jsonResponse = @"{
+                ""id"": ""submit-btn"",
+                ""name"": """",
+                ""xpath"": ""//button"",
+                ""cssSelector"": """",
+                ""className"": """",
+                ""linkText"": """",
+                ""role"": ""button"",
+                ""testId"": ""submit-test"",
+                ""placeholder"": """",
+                ""text"": """",
+                ""title"": """"
+            }";
+
+            _mockLLMClient.GetCompletionAsync(Arg.Any<string>()).Returns(jsonResponse);
+
+            // Act
+            var result = await GetLocatorsFromLLMs.GetHealedLocator(
+                _mockLLMClient,
+                _samplePageSource,
+                "id",
+                "old-btn");
+
+            // Assert
+            result.Should().NotBeNull();
+            result!.id.Should().Be("submit-btn");
+            result!.name.Should().BeEmpty();
+            result.xpath.Should().Be("//button");
+            result.cssSelector.Should().BeEmpty();
+            result.role.Should().Be("button");
+            result.testId.Should().Be("submit-test");
+        }
+
+        [Test(Description = "Verify GetHealedLocator returns null for invalid JSON")]
+        public async Task GetHealedLocator_InvalidJSON_ShouldReturnNull()
+        {
+            // Arrange
+            var invalidJson = "This is not valid JSON";
+            _mockLLMClient.GetCompletionAsync(Arg.Any<string>()).Returns(invalidJson);
+
+            // Act
+            var result = await GetLocatorsFromLLMs.GetHealedLocator(
+                _mockLLMClient,
+                _samplePageSource,
+                "id",
+                "test-btn");
+
+            // Assert
+            result.Should().BeNull();
+        }
+
+        [Test(Description = "Verify GetHealedLocator returns null for empty response")]
+        public async Task GetHealedLocator_EmptyResponse_ShouldReturnNull()
+        {
+            // Arrange
+            _mockLLMClient.GetCompletionAsync(Arg.Any<string>()).Returns("");
+
+            // Act
+            var result = await GetLocatorsFromLLMs.GetHealedLocator(
+                _mockLLMClient,
+                _samplePageSource,
+                "id",
+                "test-btn");
+
+            // Assert
+            result.Should().BeNull();
+        }
+
+        [Test(Description = "Verify GetHealedLocator handles null in JSON response")]
+        public async Task GetHealedLocator_NullInJSON_ShouldHandleGracefully()
+        {
+            // Arrange
+            var jsonResponse = @"{
+                ""id"": null,
+                ""name"": ""test"",
+                ""xpath"": null,
+                ""cssSelector"": ""#test"",
+                ""className"": null,
+                ""linkText"": null,
+                ""role"": null,
+                ""testId"": null,
+                ""placeholder"": null,
+                ""text"": null,
+                ""title"": null
+            }";
+
+            _mockLLMClient.GetCompletionAsync(Arg.Any<string>()).Returns(jsonResponse);
+
+            // Act
+            var result = await GetLocatorsFromLLMs.GetHealedLocator(
+                _mockLLMClient,
+                _samplePageSource,
+                "id",
+                "old-id");
+
+            // Assert
+            result.Should().NotBeNull();
+            // JSON null values are deserialized as C# null, which becomes empty string for string properties
+            result!.name.Should().Be("test");
+            result.cssSelector.Should().Be("#test");
+        }
+
+        #endregion
+
+        #region Prompt Construction Tests
+
+        [Test(Description = "Verify GetHealedLocator prompt includes page source")]
+        public async Task GetHealedLocator_Prompt_ShouldIncludePageSource()
+        {
+            // Arrange
+            var jsonResponse = "{}";
+            _mockLLMClient.GetCompletionAsync(Arg.Any<string>()).Returns(jsonResponse);
+
+            // Act
+            await GetLocatorsFromLLMs.GetHealedLocator(
+                _mockLLMClient,
+                _samplePageSource,
+                "id",
+                "test");
+
+            // Assert
+            await _mockLLMClient.Received(1).GetCompletionAsync(Arg.Is<string>(
+                prompt => prompt.Contains(_samplePageSource)));
+        }
+
+        [Test(Description = "Verify GetHealedLocator prompt includes locator type and value")]
+        public async Task GetHealedLocator_Prompt_ShouldIncludeLocatorInfo()
+        {
+            // Arrange
+            var locatorType = "xpath";
+            var locatorValue = "//button[@id='submit']";
+            var jsonResponse = "{}";
+            _mockLLMClient.GetCompletionAsync(Arg.Any<string>()).Returns(jsonResponse);
+
+            // Act
+            await GetLocatorsFromLLMs.GetHealedLocator(
+                _mockLLMClient,
+                _samplePageSource,
+                locatorType,
+                locatorValue);
+
+            // Assert
+            await _mockLLMClient.Received(1).GetCompletionAsync(Arg.Is<string>(
+                prompt => prompt.Contains(locatorType) && prompt.Contains(locatorValue)));
+        }
+
+        [Test(Description = "Verify GetHealedLocator prompt requests JSON format")]
+        public async Task GetHealedLocator_Prompt_ShouldRequestJSONFormat()
+        {
+            // Arrange
+            var jsonResponse = "{}";
+            _mockLLMClient.GetCompletionAsync(Arg.Any<string>()).Returns(jsonResponse);
+
+            // Act
+            await GetLocatorsFromLLMs.GetHealedLocator(
+                _mockLLMClient,
+                _samplePageSource,
+                "id",
+                "test");
+
+            // Assert
+            await _mockLLMClient.Received(1).GetCompletionAsync(Arg.Is<string>(
+                prompt => prompt.Contains("JSON") || prompt.Contains("json")));
+        }
+
+        [Test(Description = "Verify GetHealedLocator prompt mentions all selector types")]
+        public async Task GetHealedLocator_Prompt_ShouldMentionAllSelectorTypes()
+        {
+            // Arrange
+            var jsonResponse = "{}";
+            _mockLLMClient.GetCompletionAsync(Arg.Any<string>()).Returns(jsonResponse);
+
+            // Act
+            await GetLocatorsFromLLMs.GetHealedLocator(
+                _mockLLMClient,
+                _samplePageSource,
+                "id",
+                "test");
+
+            // Assert
+            await _mockLLMClient.Received(1).GetCompletionAsync(Arg.Is<string>(prompt =>
+                prompt.Contains("id") &&
+                prompt.Contains("xpath") &&
+                prompt.Contains("cssSelector") &&
+                prompt.Contains("role") &&
+                prompt.Contains("testId") &&
+                prompt.Contains("placeholder") &&
+                prompt.Contains("text") &&
+                prompt.Contains("title")));
+        }
+
+        #endregion
+
+        #region Various Locator Types Tests
+
+        [Test(Description = "Verify GetHealedLocator works with ID locator type")]
+        [TestCase("id", "submit-button")]
+        [TestCase("ID", "login-btn")]
+        public async Task GetHealedLocator_IDLocatorType_ShouldWork(string locatorType, string locatorValue)
+        {
+            // Arrange
+            var jsonResponse = @"{""id"": ""new-id""}";
+            _mockLLMClient.GetCompletionAsync(Arg.Any<string>()).Returns(jsonResponse);
+
+            // Act
+            var result = await GetLocatorsFromLLMs.GetHealedLocator(
+                _mockLLMClient,
+                _samplePageSource,
+                locatorType,
+                locatorValue);
+
+            // Assert
+            result.Should().NotBeNull();
+        }
+
+        [Test(Description = "Verify GetHealedLocator works with XPath locator type")]
+        public async Task GetHealedLocator_XPathLocatorType_ShouldWork()
+        {
+            // Arrange
+            var jsonResponse = @"{""xpath"": ""//button[@type='submit']""}";
+            _mockLLMClient.GetCompletionAsync(Arg.Any<string>()).Returns(jsonResponse);
+
+            // Act
+            var result = await GetLocatorsFromLLMs.GetHealedLocator(
+                _mockLLMClient,
+                _samplePageSource,
+                "xpath",
+                "//old/path");
+
+            // Assert
+            result.Should().NotBeNull();
+            result!.xpath.Should().Be("//button[@type='submit']");
+        }
+
+        [Test(Description = "Verify GetHealedLocator works with CSS selector type")]
+        public async Task GetHealedLocator_CSSLocatorType_ShouldWork()
+        {
+            // Arrange
+            var jsonResponse = @"{""cssSelector"": "".btn-primary""}";
+            _mockLLMClient.GetCompletionAsync(Arg.Any<string>()).Returns(jsonResponse);
+
+            // Act
+            var result = await GetLocatorsFromLLMs.GetHealedLocator(
+                _mockLLMClient,
+                _samplePageSource,
+                "css",
+                ".old-class");
+
+            // Assert
+            result.Should().NotBeNull();
+            result!.cssSelector.Should().Be(".btn-primary");
+        }
+
+        [Test(Description = "Verify GetHealedLocator works with role locator type")]
+        public async Task GetHealedLocator_RoleLocatorType_ShouldWork()
+        {
+            // Arrange
+            var jsonResponse = @"{""role"": ""button""}";
+            _mockLLMClient.GetCompletionAsync(Arg.Any<string>()).Returns(jsonResponse);
+
+            // Act
+            var result = await GetLocatorsFromLLMs.GetHealedLocator(
+                _mockLLMClient,
+                _samplePageSource,
+                "role",
+                "link");
+
+            // Assert
+            result.Should().NotBeNull();
+            result!.role.Should().Be("button");
+        }
+
+        [Test(Description = "Verify GetHealedLocator works with testId locator type")]
+        public async Task GetHealedLocator_TestIdLocatorType_ShouldWork()
+        {
+            // Arrange
+            var jsonResponse = @"{""testId"": ""submit-btn-test""}";
+            _mockLLMClient.GetCompletionAsync(Arg.Any<string>()).Returns(jsonResponse);
+
+            // Act
+            var result = await GetLocatorsFromLLMs.GetHealedLocator(
+                _mockLLMClient,
+                _samplePageSource,
+                "testid",
+                "old-test-id");
+
+            // Assert
+            result.Should().NotBeNull();
+            result!.testId.Should().Be("submit-btn-test");
+        }
+
+        #endregion
+
+        #region Edge Cases
+
+        [Test(Description = "Verify GetHealedLocator with very long page source")]
+        public async Task GetHealedLocator_VeryLongPageSource_ShouldHandle()
+        {
+            // Arrange
+            var longPageSource = new string('X', 100000);
+            var jsonResponse = @"{""id"": ""test""}";
+            _mockLLMClient.GetCompletionAsync(Arg.Any<string>()).Returns(jsonResponse);
+
+            // Act
+            var result = await GetLocatorsFromLLMs.GetHealedLocator(
+                _mockLLMClient,
+                longPageSource,
+                "id",
+                "test");
+
+            // Assert
+            result.Should().NotBeNull();
+        }
+
+        [Test(Description = "Verify GetHealedLocator with empty page source")]
+        public async Task GetHealedLocator_EmptyPageSource_ShouldNotThrow()
+        {
+            // Arrange
+            var jsonResponse = @"{""id"": ""test""}";
+            _mockLLMClient.GetCompletionAsync(Arg.Any<string>()).Returns(jsonResponse);
+
+            // Act
+            var result = await GetLocatorsFromLLMs.GetHealedLocator(
+                _mockLLMClient,
+                "",
+                "id",
+                "test");
+
+            // Assert
+            result.Should().NotBeNull();
+        }
+
+        [Test(Description = "Verify GetHealedLocator with special characters in locator value")]
+        public async Task GetHealedLocator_SpecialCharactersInLocator_ShouldHandle()
+        {
+            // Arrange
+            var jsonResponse = @"{""id"": ""test""}";
+            _mockLLMClient.GetCompletionAsync(Arg.Any<string>()).Returns(jsonResponse);
+
+            // Act
+            var result = await GetLocatorsFromLLMs.GetHealedLocator(
+                _mockLLMClient,
+                _samplePageSource,
+                "xpath",
+                "//div[@data-test='user:name@test.com']");
+
+            // Assert
+            result.Should().NotBeNull();
+        }
+
+        [Test(Description = "Verify GetHealedLocator with malformed HTML page source")]
+        public async Task GetHealedLocator_MalformedHTML_ShouldNotThrow()
+        {
+            // Arrange
+            var malformedHTML = "<div><button>Unclosed tags";
+            var jsonResponse = @"{""id"": ""test""}";
+            _mockLLMClient.GetCompletionAsync(Arg.Any<string>()).Returns(jsonResponse);
+
+            // Act
+            var result = await GetLocatorsFromLLMs.GetHealedLocator(
+                _mockLLMClient,
+                malformedHTML,
+                "id",
+                "test");
+
+            // Assert
+            result.Should().NotBeNull();
+        }
+
+        [Test(Description = "Verify GetHealedLocator with escaped characters in JSON response")]
+        public async Task GetHealedLocator_EscapedCharactersInJSON_ShouldParse()
+        {
+            // Arrange
+            var jsonResponse = @"{
+                ""id"": ""test\""-id"",
+                ""xpath"": ""//div[@class='test\\nclass']"",
+                ""text"": ""Button\tText""
+            }";
+            _mockLLMClient.GetCompletionAsync(Arg.Any<string>()).Returns(jsonResponse);
+
+            // Act
+            var result = await GetLocatorsFromLLMs.GetHealedLocator(
+                _mockLLMClient,
+                _samplePageSource,
+                "id",
+                "old");
+
+            // Assert
+            result.Should().NotBeNull();
+            result!.id.Should().Contain("\"");
+            result.text.Should().Contain("\t");
+        }
+
+        #endregion
+
+        #region LLM Client Interaction Tests
+
+        [Test(Description = "Verify GetHealedLocator calls LLM client GetCompletionAsync once")]
+        public async Task GetHealedLocator_CallsLLMClient_ExactlyOnce()
+        {
+            // Arrange
+            var jsonResponse = @"{""id"": ""test""}";
+            _mockLLMClient.GetCompletionAsync(Arg.Any<string>()).Returns(jsonResponse);
+
+            // Act
+            await GetLocatorsFromLLMs.GetHealedLocator(
+                _mockLLMClient,
+                _samplePageSource,
+                "id",
+                "test");
+
+            // Assert
+            await _mockLLMClient.Received(1).GetCompletionAsync(Arg.Any<string>());
+        }
+
+        [Test(Description = "Verify GetHealedLocator handles LLM client exception")]
+        public void GetHealedLocator_LLMClientThrows_ShouldPropagateException()
+        {
+            // Arrange
+            _mockLLMClient.GetCompletionAsync(Arg.Any<string>())
+                .Returns<string>(x => throw new Exception("LLM API error"));
+
+            // Act & Assert
+            Assert.ThrowsAsync<Exception>(async () =>
+                await GetLocatorsFromLLMs.GetHealedLocator(
+                    _mockLLMClient,
+                    _samplePageSource,
+                    "id",
+                    "test"));
+        }
+
+        #endregion
+    }
+}
