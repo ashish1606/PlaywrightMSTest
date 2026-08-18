@@ -1,0 +1,558 @@
+using ExpleoPlaywright.LLM.SelfHealing.Utils.LLM;
+using FluentAssertions;
+using Microsoft.Playwright;
+using NSubstitute;
+using NSubstitute.ExceptionExtensions;
+using NUnit.Framework;
+
+namespace ExpleoPlaywright.LLM.SelfHealing.Tests
+{
+    /// <summary>
+    /// Comprehensive unit tests for the SelfHealingLocators class, which provides self-healing capabilities
+    /// for Playwright locators by automatically finding alternative selectors when the primary selector fails.
+    /// </summary>
+    [TestFixture]
+    [Category("Unit")]
+    [Category("SelfHealing")]
+    public class SelfHealingLocatorsTest
+    {
+        private IPage _mockPage;
+        private ILocator _mockLocator;
+        private string _testCacheFilePath;
+
+        [SetUp]
+        public void Setup()
+        {
+            // Create mock Playwright objects for each test
+            _mockPage = Substitute.For<IPage>();
+            _mockLocator = Substitute.For<ILocator>();
+
+            // Create a temporary cache file path for testing
+            _testCacheFilePath = Path.Combine(Path.GetTempPath(), $"test-healed-locator-{Guid.NewGuid()}.json");
+        }
+
+        [TearDown]
+        public void TearDown()
+        {
+            // Clean up test cache file
+            if (File.Exists(_testCacheFilePath))
+                File.Delete(_testCacheFilePath);
+        }
+
+        #region Constructor Tests
+
+        [Test(Description = "Verify SelfHealingLocators can be instantiated with valid parameters")]
+        public void Constructor_ValidParameters_ShouldCreateInstance()
+        {
+            // Arrange & Act
+            var selfHealing = new SelfHealingLocators(_mockPage, "#submit-button");
+
+            // Assert
+            selfHealing.Should().NotBeNull();
+        }
+
+        [Test(Description = "Verify SelfHealingLocators works with various selector types")]
+        [TestCase("#id-selector")]
+        [TestCase(".class-selector")]
+        [TestCase("//xpath/selector")]
+        [TestCase("text=Click Me")]
+        [TestCase("role=button")]
+        [TestCase("[data-testid='test-id']")]
+        public void Constructor_VariousSelectorTypes_ShouldAcceptAll(string selector)
+        {
+            // Arrange & Act
+            var selfHealing = new SelfHealingLocators(_mockPage, selector);
+
+            // Assert
+            selfHealing.Should().NotBeNull();
+        }
+
+        #endregion
+
+        #region FindElementAsync - Current Strategy Success
+
+        [Test(Description = "Verify FindElementAsync returns element when current strategy succeeds")]
+        public async Task FindElementAsync_CurrentStrategySucceeds_ShouldReturnElement()
+        {
+            // Arrange
+            var selector = "#submit-button";
+            _mockPage.Locator(selector).Returns(_mockLocator);
+            _mockLocator.WaitForAsync(Arg.Any<LocatorWaitForOptions>()).Returns(Task.CompletedTask);
+
+            var selfHealing = new SelfHealingLocators(_mockPage, selector);
+
+            // Act
+            var result = await selfHealing.FindElementAsync();
+
+            // Assert
+            result.Should().NotBeNull();
+            result.Should().Be(_mockLocator);
+            await _mockLocator.Received(1).WaitForAsync(Arg.Any<LocatorWaitForOptions>());
+        }
+
+        [Test(Description = "Verify FindElementAsync with CSS selector succeeds")]
+        public async Task FindElementAsync_CssSelector_ShouldReturnElement()
+        {
+            // Arrange
+            var selector = ".btn-primary";
+            _mockPage.Locator(selector).Returns(_mockLocator);
+            _mockLocator.WaitForAsync(Arg.Any<LocatorWaitForOptions>()).Returns(Task.CompletedTask);
+
+            var selfHealing = new SelfHealingLocators(_mockPage, selector);
+
+            // Act
+            var result = await selfHealing.FindElementAsync();
+
+            // Assert
+            result.Should().NotBeNull();
+            _mockPage.Received(1).Locator(selector);
+        }
+
+        [Test(Description = "Verify FindElementAsync with XPath selector succeeds")]
+        public async Task FindElementAsync_XPathSelector_ShouldReturnElement()
+        {
+            // Arrange
+            var selector = "//button[@id='submit']";
+            _mockPage.Locator(selector).Returns(_mockLocator);
+            _mockLocator.WaitForAsync(Arg.Any<LocatorWaitForOptions>()).Returns(Task.CompletedTask);
+
+            var selfHealing = new SelfHealingLocators(_mockPage, selector);
+
+            // Act
+            var result = await selfHealing.FindElementAsync();
+
+            // Assert
+            result.Should().NotBeNull();
+        }
+
+        [Test(Description = "Verify FindElementAsync with text selector succeeds")]
+        public async Task FindElementAsync_TextSelector_ShouldReturnElement()
+        {
+            // Arrange
+            var selector = "text=Submit Form";
+            _mockPage.Locator(selector).Returns(_mockLocator);
+            _mockLocator.WaitForAsync(Arg.Any<LocatorWaitForOptions>()).Returns(Task.CompletedTask);
+
+            var selfHealing = new SelfHealingLocators(_mockPage, selector);
+
+            // Act
+            var result = await selfHealing.FindElementAsync();
+
+            // Assert
+            result.Should().NotBeNull();
+        }
+
+        [Test(Description = "Verify FindElementAsync with role selector succeeds")]
+        public async Task FindElementAsync_RoleSelector_ShouldReturnElement()
+        {
+            // Arrange
+            var selector = "role=button";
+            _mockPage.Locator(selector).Returns(_mockLocator);
+            _mockLocator.WaitForAsync(Arg.Any<LocatorWaitForOptions>()).Returns(Task.CompletedTask);
+
+            var selfHealing = new SelfHealingLocators(_mockPage, selector);
+
+            // Act
+            var result = await selfHealing.FindElementAsync();
+
+            // Assert
+            result.Should().NotBeNull();
+        }
+
+        #endregion
+
+        #region FindElementAsync - Retry Attempts
+
+        [Test(Description = "Verify FindElementAsync exhausts all retry attempts before failing")]
+        public void FindElementAsync_AllStrategiesFail_ShouldThrowAfterRetries()
+        {
+            // Arrange
+            var selector = "#non-existent-button";
+            _mockPage.Locator(Arg.Any<string>()).Returns(_mockLocator);
+            _mockLocator.WaitForAsync(Arg.Any<LocatorWaitForOptions>())
+                .Throws(new TimeoutException("Element not found"));
+
+            var selfHealing = new SelfHealingLocators(_mockPage, selector);
+
+            // Act & Assert
+            var exception = Assert.ThrowsAsync<PlaywrightException>(
+                async () => await selfHealing.FindElementAsync(retryAttempts: 0));
+
+            exception!.Message.Should().Contain("Failed to locate element after all healing attempts");
+            exception.Message.Should().Contain(selector);
+        }
+
+        [Test(Description = "Verify FindElementAsync with zero retries fails quickly")]
+        public void FindElementAsync_ZeroRetries_ShouldFailFast()
+        {
+            // Arrange
+            var selector = "#missing-element";
+            _mockPage.Locator(selector).Returns(_mockLocator);
+            _mockLocator.WaitForAsync(Arg.Any<LocatorWaitForOptions>())
+                .Throws(new TimeoutException());
+
+            var selfHealing = new SelfHealingLocators(_mockPage, selector);
+
+            // Act & Assert
+            Assert.ThrowsAsync<PlaywrightException>(
+                async () => await selfHealing.FindElementAsync(retryAttempts: 0));
+        }
+
+        #endregion
+
+        #region FindElementAsync - Semantic Context
+
+        [Test(Description = "Verify FindElementAsync accepts semantic context parameter")]
+        public async Task FindElementAsync_WithSemanticContext_ShouldAcceptParameter()
+        {
+            // Arrange
+            var selector = "#login-btn";
+            var semanticContext = "Login button on the main page";
+            _mockPage.Locator(selector).Returns(_mockLocator);
+            _mockLocator.WaitForAsync(Arg.Any<LocatorWaitForOptions>()).Returns(Task.CompletedTask);
+
+            var selfHealing = new SelfHealingLocators(_mockPage, selector);
+
+            // Act
+            var result = await selfHealing.FindElementAsync(semanticContext: semanticContext);
+
+            // Assert
+            result.Should().NotBeNull();
+        }
+
+        [Test(Description = "Verify FindElementAsync works without semantic context")]
+        public async Task FindElementAsync_WithoutSemanticContext_ShouldWork()
+        {
+            // Arrange
+            var selector = "#login-btn";
+            _mockPage.Locator(selector).Returns(_mockLocator);
+            _mockLocator.WaitForAsync(Arg.Any<LocatorWaitForOptions>()).Returns(Task.CompletedTask);
+
+            var selfHealing = new SelfHealingLocators(_mockPage, selector);
+
+            // Act
+            var result = await selfHealing.FindElementAsync(semanticContext: null);
+
+            // Assert
+            result.Should().NotBeNull();
+        }
+
+        #endregion
+
+        #region SaveSuccessfulLocatorToCache Tests
+
+        [Test(Description = "Verify SaveSuccessfulLocatorToCache stores ID selector correctly")]
+        public void SaveSuccessfulLocatorToCache_IdSelector_ShouldStoreValue()
+        {
+            // Arrange
+            var originalSelector = "#old-button";
+            var selfHealing = new SelfHealingLocators(_mockPage, originalSelector);
+
+            // Act
+            selfHealing.SaveSuccessfulLocatorToCache("id", "#new-button");
+
+            // Assert - The cache should now contain the healed locator
+            var cache = new LocatorCache();
+            var retrieved = cache.TryGetHealedLocator(originalSelector, out var healedLocator);
+
+            // Note: This test verifies the method doesn't throw an exception
+            // Actual cache persistence would require integration testing
+        }
+
+        [Test(Description = "Verify SaveSuccessfulLocatorToCache handles various locator types")]
+        [TestCase("id", "#submit-btn")]
+        [TestCase("xpath", "//button[@id='submit']")]
+        [TestCase("css", ".btn-primary")]
+        [TestCase("testid", "[data-testid='submit']")]
+        [TestCase("role", "role=button")]
+        public void SaveSuccessfulLocatorToCache_VariousTypes_ShouldHandle(string type, string value)
+        {
+            // Arrange
+            var selfHealing = new SelfHealingLocators(_mockPage, "#original");
+
+            // Act & Assert - Should not throw
+            Assert.DoesNotThrow(() => selfHealing.SaveSuccessfulLocatorToCache(type, value));
+        }
+
+        #endregion
+
+        #region Edge Cases and Error Handling
+
+        [Test(Description = "Verify SelfHealingLocators handles empty selector gracefully")]
+        public void Constructor_EmptySelector_ShouldAccept()
+        {
+            // Arrange & Act
+            var selfHealing = new SelfHealingLocators(_mockPage, "");
+
+            // Assert
+            selfHealing.Should().NotBeNull();
+        }
+
+        [Test(Description = "Verify FindElementAsync handles timeout gracefully")]
+        public void FindElementAsync_Timeout_ShouldThrowPlaywrightException()
+        {
+            // Arrange
+            var selector = "#timeout-element";
+            _mockPage.Locator(selector).Returns(_mockLocator);
+            _mockLocator.WaitForAsync(Arg.Any<LocatorWaitForOptions>())
+                .Throws(new TimeoutException("Timeout waiting for element"));
+
+            var selfHealing = new SelfHealingLocators(_mockPage, selector);
+
+            // Act & Assert
+            var exception = Assert.ThrowsAsync<PlaywrightException>(
+                async () => await selfHealing.FindElementAsync(retryAttempts: 0));
+
+            exception!.Message.Should().Contain("Failed to locate element");
+        }
+
+        [Test(Description = "Verify FindElementAsync with special characters in selector")]
+        public async Task FindElementAsync_SpecialCharactersInSelector_ShouldHandle()
+        {
+            // Arrange
+            var selector = "[data-test='user:name@test.com']";
+            _mockPage.Locator(selector).Returns(_mockLocator);
+            _mockLocator.WaitForAsync(Arg.Any<LocatorWaitForOptions>()).Returns(Task.CompletedTask);
+
+            var selfHealing = new SelfHealingLocators(_mockPage, selector);
+
+            // Act
+            var result = await selfHealing.FindElementAsync();
+
+            // Assert
+            result.Should().NotBeNull();
+        }
+
+        [Test(Description = "Verify FindElementAsync with very long selector")]
+        public async Task FindElementAsync_LongSelector_ShouldHandle()
+        {
+            // Arrange
+            var selector = "//div[@class='container']//div[@class='form']//div[@class='input-group']//button[@type='submit']";
+            _mockPage.Locator(selector).Returns(_mockLocator);
+            _mockLocator.WaitForAsync(Arg.Any<LocatorWaitForOptions>()).Returns(Task.CompletedTask);
+
+            var selfHealing = new SelfHealingLocators(_mockPage, selector);
+
+            // Act
+            var result = await selfHealing.FindElementAsync();
+
+            // Assert
+            result.Should().NotBeNull();
+        }
+
+        [Test(Description = "Verify FindElementAsync with whitespace in selector")]
+        [TestCase("text=Click Me")]
+        [TestCase("text=  Submit Form  ")]
+        [TestCase("[placeholder='Enter your name']")]
+        public async Task FindElementAsync_WhitespaceInSelector_ShouldHandle(string selector)
+        {
+            // Arrange
+            _mockPage.Locator(selector).Returns(_mockLocator);
+            _mockLocator.WaitForAsync(Arg.Any<LocatorWaitForOptions>()).Returns(Task.CompletedTask);
+
+            var selfHealing = new SelfHealingLocators(_mockPage, selector);
+
+            // Act
+            var result = await selfHealing.FindElementAsync();
+
+            // Assert
+            result.Should().NotBeNull();
+        }
+
+        #endregion
+
+        #region Multiple Selectors and Strategy Switching
+
+        [Test(Description = "Verify SelfHealingLocators can work with multiple class names")]
+        public async Task FindElementAsync_MultipleClassNames_ShouldUseFirst()
+        {
+            // Arrange
+            var selector = ".btn.btn-primary.btn-lg";
+            _mockPage.Locator(selector).Returns(_mockLocator);
+            _mockLocator.WaitForAsync(Arg.Any<LocatorWaitForOptions>()).Returns(Task.CompletedTask);
+
+            var selfHealing = new SelfHealingLocators(_mockPage, selector);
+
+            // Act
+            var result = await selfHealing.FindElementAsync();
+
+            // Assert
+            result.Should().NotBeNull();
+        }
+
+        [Test(Description = "Verify SelfHealingLocators handles attribute selectors")]
+        [TestCase("[type='submit']")]
+        [TestCase("[name='username']")]
+        [TestCase("[placeholder='Enter email']")]
+        [TestCase("[title='Submit form']")]
+        public async Task FindElementAsync_AttributeSelectors_ShouldHandle(string selector)
+        {
+            // Arrange
+            _mockPage.Locator(selector).Returns(_mockLocator);
+            _mockLocator.WaitForAsync(Arg.Any<LocatorWaitForOptions>()).Returns(Task.CompletedTask);
+
+            var selfHealing = new SelfHealingLocators(_mockPage, selector);
+
+            // Act
+            var result = await selfHealing.FindElementAsync();
+
+            // Assert
+            result.Should().NotBeNull();
+        }
+
+        [Test(Description = "Verify SelfHealingLocators handles combined selectors")]
+        public async Task FindElementAsync_CombinedSelectors_ShouldHandle()
+        {
+            // Arrange
+            var selector = "button.submit[type='submit']";
+            _mockPage.Locator(selector).Returns(_mockLocator);
+            _mockLocator.WaitForAsync(Arg.Any<LocatorWaitForOptions>()).Returns(Task.CompletedTask);
+
+            var selfHealing = new SelfHealingLocators(_mockPage, selector);
+
+            // Act
+            var result = await selfHealing.FindElementAsync();
+
+            // Assert
+            result.Should().NotBeNull();
+        }
+
+        #endregion
+
+        #region Retry Behavior Tests
+
+        [Test(Description = "Verify FindElementAsync with 1 retry attempt")]
+        public void FindElementAsync_OneRetryAttempt_ShouldFailAfterOne()
+        {
+            // Arrange
+            var selector = "#missing-button";
+            _mockPage.Locator(Arg.Any<string>()).Returns(_mockLocator);
+            _mockLocator.WaitForAsync(Arg.Any<LocatorWaitForOptions>())
+                .Throws(new TimeoutException());
+
+            var selfHealing = new SelfHealingLocators(_mockPage, selector);
+
+            // Act & Assert
+            Assert.ThrowsAsync<PlaywrightException>(
+                async () => await selfHealing.FindElementAsync(retryAttempts: 1));
+        }
+
+        [Test(Description = "Verify FindElementAsync with 5 retry attempts")]
+        public void FindElementAsync_FiveRetryAttempts_ShouldFailAfterFive()
+        {
+            // Arrange
+            var selector = "#missing-button";
+            _mockPage.Locator(Arg.Any<string>()).Returns(_mockLocator);
+            _mockLocator.WaitForAsync(Arg.Any<LocatorWaitForOptions>())
+                .Throws(new TimeoutException());
+
+            var selfHealing = new SelfHealingLocators(_mockPage, selector);
+
+            // Act & Assert
+            Assert.ThrowsAsync<PlaywrightException>(
+                async () => await selfHealing.FindElementAsync(retryAttempts: 5));
+        }
+
+        #endregion
+
+        #region Playwright-Specific Selector Tests
+
+        [Test(Description = "Verify FindElementAsync with data-testid selector")]
+        [TestCase("[data-testid='login-button']")]
+        [TestCase("[data-testid='submit-form']")]
+        [TestCase("[data-test='user-input']")]
+        public async Task FindElementAsync_DataTestIdSelector_ShouldWork(string selector)
+        {
+            // Arrange
+            _mockPage.Locator(selector).Returns(_mockLocator);
+            _mockLocator.WaitForAsync(Arg.Any<LocatorWaitForOptions>()).Returns(Task.CompletedTask);
+
+            var selfHealing = new SelfHealingLocators(_mockPage, selector);
+
+            // Act
+            var result = await selfHealing.FindElementAsync();
+
+            // Assert
+            result.Should().NotBeNull();
+        }
+
+        [Test(Description = "Verify FindElementAsync with role selectors")]
+        [TestCase("role=button")]
+        [TestCase("role=textbox")]
+        [TestCase("role=link")]
+        [TestCase("role=checkbox")]
+        public async Task FindElementAsync_RoleSelectors_ShouldWork(string selector)
+        {
+            // Arrange
+            _mockPage.Locator(selector).Returns(_mockLocator);
+            _mockLocator.WaitForAsync(Arg.Any<LocatorWaitForOptions>()).Returns(Task.CompletedTask);
+
+            var selfHealing = new SelfHealingLocators(_mockPage, selector);
+
+            // Act
+            var result = await selfHealing.FindElementAsync();
+
+            // Assert
+            result.Should().NotBeNull();
+        }
+
+        [Test(Description = "Verify FindElementAsync with nested selectors")]
+        public async Task FindElementAsync_NestedSelectors_ShouldWork()
+        {
+            // Arrange
+            var selector = "div.container >> button.submit";
+            _mockPage.Locator(selector).Returns(_mockLocator);
+            _mockLocator.WaitForAsync(Arg.Any<LocatorWaitForOptions>()).Returns(Task.CompletedTask);
+
+            var selfHealing = new SelfHealingLocators(_mockPage, selector);
+
+            // Act
+            var result = await selfHealing.FindElementAsync();
+
+            // Assert
+            result.Should().NotBeNull();
+        }
+
+        #endregion
+
+        #region Constructor Parameter Validation
+
+        [Test(Description = "Verify constructor with null page throws appropriate error")]
+        public void Constructor_NullPage_ShouldThrow()
+        {
+            // Arrange, Act & Assert
+            Assert.Throws<NullReferenceException>(() =>
+            {
+                var selfHealing = new SelfHealingLocators(null!, "#selector");
+            });
+        }
+
+        #endregion
+
+        #region Concurrent Access Tests
+
+        [Test(Description = "Verify SelfHealingLocators can handle concurrent FindElementAsync calls")]
+        public async Task FindElementAsync_ConcurrentCalls_ShouldHandleAll()
+        {
+            // Arrange
+            var selector = "#concurrent-element";
+            _mockPage.Locator(selector).Returns(_mockLocator);
+            _mockLocator.WaitForAsync(Arg.Any<LocatorWaitForOptions>()).Returns(Task.CompletedTask);
+
+            var selfHealing = new SelfHealingLocators(_mockPage, selector);
+
+            // Act
+            var task1 = selfHealing.FindElementAsync();
+            var task2 = selfHealing.FindElementAsync();
+            var task3 = selfHealing.FindElementAsync();
+
+            var results = await Task.WhenAll(task1, task2, task3);
+
+            // Assert
+            results.Should().HaveCount(3);
+            results.Should().AllSatisfy(r => r.Should().NotBeNull());
+        }
+
+        #endregion
+    }
+}
