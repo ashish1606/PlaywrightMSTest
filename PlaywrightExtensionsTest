@@ -1,0 +1,528 @@
+using ExpleoPlaywright.LLM.SelfHealing.Utils.Extensions;
+using FluentAssertions;
+using Microsoft.Playwright;
+using NSubstitute;
+using NUnit.Framework;
+
+namespace ExpleoPlaywright.LLM.SelfHealing.Tests
+{
+    /// <summary>
+    /// Unit tests for PlaywrightExtensions class which provides extension methods
+    /// for IPage and Task&lt;ILocator&gt; to simplify Playwright interactions.
+    /// </summary>
+    [TestFixture]
+    [Category("Unit")]
+    [Category("Extensions")]
+    public class PlaywrightExtensionsTest
+    {
+        private IPage _mockPage;
+        private ILocator _mockLocator;
+
+        [SetUp]
+        public void Setup()
+        {
+            _mockPage = Substitute.For<IPage>();
+            _mockLocator = Substitute.For<ILocator>();
+        }
+
+        #region AiFindElementAsync Tests
+
+        [Test(Description = "Verify AiFindElementAsync extension method returns locator")]
+        public async Task AiFindElementAsync_ValidSelector_ShouldReturnLocator()
+        {
+            // Arrange
+            var selector = "#submit-button";
+            _mockPage.Locator(selector).Returns(_mockLocator);
+            _mockLocator.WaitForAsync(Arg.Any<LocatorWaitForOptions>()).Returns(Task.CompletedTask);
+
+            // Act
+            var result = await _mockPage.AiFindElementAsync(selector);
+
+            // Assert
+            result.Should().NotBeNull();
+        }
+
+        [Test(Description = "Verify AiFindElementAsync with semantic context")]
+        public async Task AiFindElementAsync_WithSemanticContext_ShouldPass()
+        {
+            // Arrange
+            var selector = "#login-btn";
+            var semanticContext = "Login button on the authentication page";
+            _mockPage.Locator(selector).Returns(_mockLocator);
+            _mockLocator.WaitForAsync(Arg.Any<LocatorWaitForOptions>()).Returns(Task.CompletedTask);
+
+            // Act
+            var result = await _mockPage.AiFindElementAsync(selector, semanticContext);
+
+            // Assert
+            result.Should().NotBeNull();
+        }
+
+        [Test(Description = "Verify AiFindElementAsync without semantic context")]
+        public async Task AiFindElementAsync_WithoutSemanticContext_ShouldWork()
+        {
+            // Arrange
+            var selector = ".btn-primary";
+            _mockPage.Locator(selector).Returns(_mockLocator);
+            _mockLocator.WaitForAsync(Arg.Any<LocatorWaitForOptions>()).Returns(Task.CompletedTask);
+
+            // Act
+            var result = await _mockPage.AiFindElementAsync(selector);
+
+            // Assert
+            result.Should().NotBeNull();
+        }
+
+        [Test(Description = "Verify AiFindElementAsync with null semantic context")]
+        public async Task AiFindElementAsync_NullSemanticContext_ShouldWork()
+        {
+            // Arrange
+            var selector = "#element";
+            _mockPage.Locator(selector).Returns(_mockLocator);
+            _mockLocator.WaitForAsync(Arg.Any<LocatorWaitForOptions>()).Returns(Task.CompletedTask);
+
+            // Act
+            var result = await _mockPage.AiFindElementAsync(selector, null);
+
+            // Assert
+            result.Should().NotBeNull();
+        }
+
+        [Test(Description = "Verify AiFindElementAsync with various selector types")]
+        [TestCase("#id-selector")]
+        [TestCase(".class-selector")]
+        [TestCase("//xpath/selector")]
+        [TestCase("text=Click Me")]
+        [TestCase("role=button")]
+        [TestCase("[data-testid='test-id']")]
+        public async Task AiFindElementAsync_VariousSelectorTypes_ShouldAcceptAll(string selector)
+        {
+            // Arrange
+            _mockPage.Locator(selector).Returns(_mockLocator);
+            _mockLocator.WaitForAsync(Arg.Any<LocatorWaitForOptions>()).Returns(Task.CompletedTask);
+
+            // Act
+            var result = await _mockPage.AiFindElementAsync(selector);
+
+            // Assert
+            result.Should().NotBeNull();
+        }
+
+        [Test(Description = "Verify AiFindElementAsync with empty selector")]
+        public async Task AiFindElementAsync_EmptySelector_ShouldHandle()
+        {
+            // Arrange
+            var selector = "";
+            _mockPage.Locator(selector).Returns(_mockLocator);
+            _mockLocator.WaitForAsync(Arg.Any<LocatorWaitForOptions>()).Returns(Task.CompletedTask);
+
+            // Act
+            var result = await _mockPage.AiFindElementAsync(selector);
+
+            // Assert
+            result.Should().NotBeNull();
+        }
+
+        #endregion
+
+        #region ClickAsync Extension Tests
+
+        [Test(Description = "Verify ClickAsync extension method clicks the element")]
+        public async Task ClickAsync_ValidLocator_ShouldClick()
+        {
+            // Arrange
+            var locatorTask = Task.FromResult(_mockLocator);
+            _mockLocator.ClickAsync(Arg.Any<LocatorClickOptions>()).Returns(Task.CompletedTask);
+
+            // Act
+            await locatorTask.ClickAsync();
+
+            // Assert
+            await _mockLocator.Received(1).ClickAsync(Arg.Any<LocatorClickOptions>());
+        }
+
+        [Test(Description = "Verify ClickAsync waits for task to complete before clicking")]
+        public async Task ClickAsync_AsyncLocator_ShouldWaitAndClick()
+        {
+            // Arrange
+            var tcs = new TaskCompletionSource<ILocator>();
+            var locatorTask = tcs.Task;
+            _mockLocator.ClickAsync(Arg.Any<LocatorClickOptions>()).Returns(Task.CompletedTask);
+
+            // Start the extension method
+            var clickTask = locatorTask.ClickAsync();
+
+            // Complete the task after a delay
+            await Task.Delay(10);
+            tcs.SetResult(_mockLocator);
+
+            // Act
+            await clickTask;
+
+            // Assert
+            await _mockLocator.Received(1).ClickAsync(Arg.Any<LocatorClickOptions>());
+        }
+
+        [Test(Description = "Verify ClickAsync handles multiple sequential clicks")]
+        public async Task ClickAsync_MultipleClicks_ShouldHandleAll()
+        {
+            // Arrange
+            var locatorTask = Task.FromResult(_mockLocator);
+            _mockLocator.ClickAsync(Arg.Any<LocatorClickOptions>()).Returns(Task.CompletedTask);
+
+            // Act
+            await locatorTask.ClickAsync();
+            await locatorTask.ClickAsync();
+            await locatorTask.ClickAsync();
+
+            // Assert
+            await _mockLocator.Received(3).ClickAsync(Arg.Any<LocatorClickOptions>());
+        }
+
+        #endregion
+
+        #region FillAsync Extension Tests
+
+        [Test(Description = "Verify FillAsync extension method fills text into element")]
+        public async Task FillAsync_ValidText_ShouldFillElement()
+        {
+            // Arrange
+            var locatorTask = Task.FromResult(_mockLocator);
+            var text = "test@example.com";
+            _mockLocator.FillAsync(text, Arg.Any<LocatorFillOptions>()).Returns(Task.CompletedTask);
+
+            // Act
+            await locatorTask.FillAsync(text);
+
+            // Assert
+            await _mockLocator.Received(1).FillAsync(text, Arg.Any<LocatorFillOptions>());
+        }
+
+        [Test(Description = "Verify FillAsync with empty string")]
+        public async Task FillAsync_EmptyString_ShouldFill()
+        {
+            // Arrange
+            var locatorTask = Task.FromResult(_mockLocator);
+            var text = "";
+            _mockLocator.FillAsync(text, Arg.Any<LocatorFillOptions>()).Returns(Task.CompletedTask);
+
+            // Act
+            await locatorTask.FillAsync(text);
+
+            // Assert
+            await _mockLocator.Received(1).FillAsync(text, Arg.Any<LocatorFillOptions>());
+        }
+
+        [Test(Description = "Verify FillAsync with special characters")]
+        [TestCase("user@test.com")]
+        [TestCase("P@ssw0rd!123")]
+        [TestCase("Name with spaces")]
+        [TestCase("Multi\nLine\nText")]
+        [TestCase("Tabs\tAnd\tSpaces")]
+        public async Task FillAsync_SpecialCharacters_ShouldHandle(string text)
+        {
+            // Arrange
+            var locatorTask = Task.FromResult(_mockLocator);
+            _mockLocator.FillAsync(text, Arg.Any<LocatorFillOptions>()).Returns(Task.CompletedTask);
+
+            // Act
+            await locatorTask.FillAsync(text);
+
+            // Assert
+            await _mockLocator.Received(1).FillAsync(text, Arg.Any<LocatorFillOptions>());
+        }
+
+        [Test(Description = "Verify FillAsync with very long text")]
+        public async Task FillAsync_LongText_ShouldHandle()
+        {
+            // Arrange
+            var locatorTask = Task.FromResult(_mockLocator);
+            var text = new string('A', 1000);
+            _mockLocator.FillAsync(text, Arg.Any<LocatorFillOptions>()).Returns(Task.CompletedTask);
+
+            // Act
+            await locatorTask.FillAsync(text);
+
+            // Assert
+            await _mockLocator.Received(1).FillAsync(text, Arg.Any<LocatorFillOptions>());
+        }
+
+        [Test(Description = "Verify FillAsync waits for locator task to complete")]
+        public async Task FillAsync_AsyncLocator_ShouldWaitAndFill()
+        {
+            // Arrange
+            var tcs = new TaskCompletionSource<ILocator>();
+            var locatorTask = tcs.Task;
+            var text = "username";
+            _mockLocator.FillAsync(text, Arg.Any<LocatorFillOptions>()).Returns(Task.CompletedTask);
+
+            // Start the extension method
+            var fillTask = locatorTask.FillAsync(text);
+
+            // Complete the task after a delay
+            await Task.Delay(10);
+            tcs.SetResult(_mockLocator);
+
+            // Act
+            await fillTask;
+
+            // Assert
+            await _mockLocator.Received(1).FillAsync(text, Arg.Any<LocatorFillOptions>());
+        }
+
+        [Test(Description = "Verify FillAsync with multiple sequential fills")]
+        public async Task FillAsync_MultipleFills_ShouldHandleAll()
+        {
+            // Arrange
+            var locatorTask = Task.FromResult(_mockLocator);
+            _mockLocator.FillAsync(Arg.Any<string>(), Arg.Any<LocatorFillOptions>()).Returns(Task.CompletedTask);
+
+            // Act
+            await locatorTask.FillAsync("first");
+            await locatorTask.FillAsync("second");
+            await locatorTask.FillAsync("third");
+
+            // Assert
+            await _mockLocator.Received(3).FillAsync(Arg.Any<string>(), Arg.Any<LocatorFillOptions>());
+        }
+
+        #endregion
+
+        #region GetTextAsync Extension Tests
+
+        [Test(Description = "Verify GetTextAsync extension method retrieves text from element")]
+        public async Task GetTextAsync_ValidLocator_ShouldReturnText()
+        {
+            // Arrange
+            var locatorTask = Task.FromResult(_mockLocator);
+            var expectedText = "Button Text";
+            _mockLocator.InnerTextAsync(Arg.Any<LocatorInnerTextOptions>()).Returns(expectedText);
+
+            // Act
+            var result = await locatorTask.GetTextAsync();
+
+            // Assert
+            result.Should().Be(expectedText);
+            await _mockLocator.Received(1).InnerTextAsync(Arg.Any<LocatorInnerTextOptions>());
+        }
+
+        [Test(Description = "Verify GetTextAsync returns empty string")]
+        public async Task GetTextAsync_EmptyText_ShouldReturnEmpty()
+        {
+            // Arrange
+            var locatorTask = Task.FromResult(_mockLocator);
+            _mockLocator.InnerTextAsync(Arg.Any<LocatorInnerTextOptions>()).Returns("");
+
+            // Act
+            var result = await locatorTask.GetTextAsync();
+
+            // Assert
+            result.Should().BeEmpty();
+        }
+
+        [Test(Description = "Verify GetTextAsync with multiline text")]
+        public async Task GetTextAsync_MultilineText_ShouldReturnAll()
+        {
+            // Arrange
+            var locatorTask = Task.FromResult(_mockLocator);
+            var expectedText = "Line 1\nLine 2\nLine 3";
+            _mockLocator.InnerTextAsync(Arg.Any<LocatorInnerTextOptions>()).Returns(expectedText);
+
+            // Act
+            var result = await locatorTask.GetTextAsync();
+
+            // Assert
+            result.Should().Be(expectedText);
+            result.Should().Contain("Line 1");
+            result.Should().Contain("Line 2");
+            result.Should().Contain("Line 3");
+        }
+
+        [Test(Description = "Verify GetTextAsync with whitespace")]
+        public async Task GetTextAsync_WhitespaceText_ShouldPreserve()
+        {
+            // Arrange
+            var locatorTask = Task.FromResult(_mockLocator);
+            var expectedText = "  Text with spaces  ";
+            _mockLocator.InnerTextAsync(Arg.Any<LocatorInnerTextOptions>()).Returns(expectedText);
+
+            // Act
+            var result = await locatorTask.GetTextAsync();
+
+            // Assert
+            result.Should().Be(expectedText);
+        }
+
+        [Test(Description = "Verify GetTextAsync waits for locator task to complete")]
+        public async Task GetTextAsync_AsyncLocator_ShouldWaitAndGetText()
+        {
+            // Arrange
+            var tcs = new TaskCompletionSource<ILocator>();
+            var locatorTask = tcs.Task;
+            var expectedText = "Async Text";
+            _mockLocator.InnerTextAsync(Arg.Any<LocatorInnerTextOptions>()).Returns(expectedText);
+
+            // Start the extension method
+            var getTextTask = locatorTask.GetTextAsync();
+
+            // Complete the task after a delay
+            await Task.Delay(10);
+            tcs.SetResult(_mockLocator);
+
+            // Act
+            var result = await getTextTask;
+
+            // Assert
+            result.Should().Be(expectedText);
+        }
+
+        [Test(Description = "Verify GetTextAsync with special characters")]
+        [TestCase("Text with © symbol")]
+        [TestCase("Price: $19.99")]
+        [TestCase("Equation: 2 + 2 = 4")]
+        [TestCase("Emoji: 😀")]
+        public async Task GetTextAsync_SpecialCharacters_ShouldReturn(string text)
+        {
+            // Arrange
+            var locatorTask = Task.FromResult(_mockLocator);
+            _mockLocator.InnerTextAsync(Arg.Any<LocatorInnerTextOptions>()).Returns(text);
+
+            // Act
+            var result = await locatorTask.GetTextAsync();
+
+            // Assert
+            result.Should().Be(text);
+        }
+
+        [Test(Description = "Verify GetTextAsync with very long text")]
+        public async Task GetTextAsync_LongText_ShouldReturnAll()
+        {
+            // Arrange
+            var locatorTask = Task.FromResult(_mockLocator);
+            var longText = new string('X', 1000);
+            _mockLocator.InnerTextAsync(Arg.Any<LocatorInnerTextOptions>()).Returns(longText);
+
+            // Act
+            var result = await locatorTask.GetTextAsync();
+
+            // Assert
+            result.Should().Be(longText);
+            result.Length.Should().Be(1000);
+        }
+
+        [Test(Description = "Verify GetTextAsync multiple times returns updated text")]
+        public async Task GetTextAsync_MultipleCalls_ShouldReturnEachTime()
+        {
+            // Arrange
+            var locatorTask = Task.FromResult(_mockLocator);
+            _mockLocator.InnerTextAsync(Arg.Any<LocatorInnerTextOptions>())
+                .Returns("First", "Second", "Third");
+
+            // Act
+            var result1 = await locatorTask.GetTextAsync();
+            var result2 = await locatorTask.GetTextAsync();
+            var result3 = await locatorTask.GetTextAsync();
+
+            // Assert
+            result1.Should().Be("First");
+            result2.Should().Be("Second");
+            result3.Should().Be("Third");
+        }
+
+        #endregion
+
+        #region Combined Extension Method Tests
+
+        [Test(Description = "Verify extension methods can be chained")]
+        public async Task ExtensionMethods_Chained_ShouldWorkTogether()
+        {
+            // Arrange
+            var selector = "#username";
+            _mockPage.Locator(selector).Returns(_mockLocator);
+            _mockLocator.WaitForAsync(Arg.Any<LocatorWaitForOptions>()).Returns(Task.CompletedTask);
+            _mockLocator.FillAsync(Arg.Any<string>(), Arg.Any<LocatorFillOptions>()).Returns(Task.CompletedTask);
+
+            // Act
+            var locator = _mockPage.AiFindElementAsync(selector);
+            await locator.FillAsync("test-user");
+
+            // Assert
+            await _mockLocator.Received(1).FillAsync("test-user", Arg.Any<LocatorFillOptions>());
+        }
+
+        [Test(Description = "Verify AiFindElementAsync followed by ClickAsync")]
+        public async Task AiFindElementAsync_ThenClick_ShouldWork()
+        {
+            // Arrange
+            var selector = "#submit-btn";
+            _mockPage.Locator(selector).Returns(_mockLocator);
+            _mockLocator.WaitForAsync(Arg.Any<LocatorWaitForOptions>()).Returns(Task.CompletedTask);
+            _mockLocator.ClickAsync(Arg.Any<LocatorClickOptions>()).Returns(Task.CompletedTask);
+
+            // Act
+            await _mockPage.AiFindElementAsync(selector).ClickAsync();
+
+            // Assert
+            await _mockLocator.Received(1).ClickAsync(Arg.Any<LocatorClickOptions>());
+        }
+
+        [Test(Description = "Verify AiFindElementAsync followed by GetTextAsync")]
+        public async Task AiFindElementAsync_ThenGetText_ShouldWork()
+        {
+            // Arrange
+            var selector = "#message";
+            var expectedText = "Success!";
+            _mockPage.Locator(selector).Returns(_mockLocator);
+            _mockLocator.WaitForAsync(Arg.Any<LocatorWaitForOptions>()).Returns(Task.CompletedTask);
+            _mockLocator.InnerTextAsync(Arg.Any<LocatorInnerTextOptions>()).Returns(expectedText);
+
+            // Act
+            var result = await _mockPage.AiFindElementAsync(selector).GetTextAsync();
+
+            // Assert
+            result.Should().Be(expectedText);
+        }
+
+        #endregion
+
+        #region Error Handling Tests
+
+        [Test(Description = "Verify ClickAsync propagates exceptions")]
+        public void ClickAsync_ElementNotClickable_ShouldThrow()
+        {
+            // Arrange
+            var locatorTask = Task.FromResult(_mockLocator);
+            _mockLocator.When(x => x.ClickAsync(Arg.Any<LocatorClickOptions>()))
+                .Do(x => throw new PlaywrightException("Element is not clickable"));
+
+            // Act & Assert
+            Assert.ThrowsAsync<PlaywrightException>(async () => await locatorTask.ClickAsync());
+        }
+
+        [Test(Description = "Verify FillAsync propagates exceptions")]
+        public void FillAsync_ElementNotEditable_ShouldThrow()
+        {
+            // Arrange
+            var locatorTask = Task.FromResult(_mockLocator);
+            _mockLocator.When(x => x.FillAsync(Arg.Any<string>(), Arg.Any<LocatorFillOptions>()))
+                .Do(x => throw new PlaywrightException("Element is not editable"));
+
+            // Act & Assert
+            Assert.ThrowsAsync<PlaywrightException>(async () => await locatorTask.FillAsync("text"));
+        }
+
+        [Test(Description = "Verify GetTextAsync propagates exceptions")]
+        public void GetTextAsync_ElementNotFound_ShouldThrow()
+        {
+            // Arrange
+            var locatorTask = Task.FromResult(_mockLocator);
+            _mockLocator.InnerTextAsync(Arg.Any<LocatorInnerTextOptions>())
+                .Returns<string>(x => throw new PlaywrightException("Element not found"));
+
+            // Act & Assert
+            Assert.ThrowsAsync<PlaywrightException>(async () => await locatorTask.GetTextAsync());
+        }
+
+        #endregion
+    }
+}
